@@ -25,6 +25,8 @@ function corTempo(createdAt) {
   return "#FF3D6E";
 }
 
+const TEMPO_AUTO_REMOVER = 15 * 60 * 1000; // 15 minutos
+
 export default function Kitchen() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -33,17 +35,38 @@ export default function Kitchen() {
   const [filter, setFilter] = useState("all");
   const [tick, setTick] = useState(0);
   const audioRef = useRef(null);
+  const timersRef = useRef({}); // ← guarda os timers de auto-remoção
 
   const fetchPedidos = useCallback(async () => {
     try {
       const { data } = await api.get("/food/pedidos");
-      setPedidos(data.filter(p => !["fechado", "aguardando_pagamento"].includes(p.status)));
+      setPedidos(data.filter(p => !["fechado", "aguardando_pagamento", "cancelado", "retirado"].includes(p.status)));
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  // Agenda remoção automática após 15min para pedidos prontos
+  function agendarRemocao(pedidoId) {
+    // Cancela timer anterior se existir
+    if (timersRef.current[pedidoId]) {
+      clearTimeout(timersRef.current[pedidoId]);
+    }
+
+    timersRef.current[pedidoId] = setTimeout(() => {
+      setPedidos(prev => prev.filter(p => p.id !== pedidoId));
+      delete timersRef.current[pedidoId];
+    }, TEMPO_AUTO_REMOVER);
+  }
+
+  function cancelarRemocao(pedidoId) {
+    if (timersRef.current[pedidoId]) {
+      clearTimeout(timersRef.current[pedidoId]);
+      delete timersRef.current[pedidoId];
+    }
+  }
 
   // Atualiza timer a cada 30s
   useEffect(() => {
@@ -58,58 +81,71 @@ export default function Kitchen() {
       setPedidos(prev => {
         const exists = prev.find(p => p.id === pedido.id);
         if (exists) return prev;
-        // Toca som
         try { audioRef.current?.play(); } catch { }
         return [pedido, ...prev];
       });
     });
 
     socket.on("pedido:atualizado", (pedido) => {
-      setPedidos(prev => prev.map(p => p.id === pedido.id ? pedido : p));
-    });
-
-    socket.on("pedido:status", (pedido) => {
-      if (["fechado", "aguardando_pagamento"].includes(pedido.status)) {
+      if (["fechado", "aguardando_pagamento", "cancelado", "retirado"].includes(pedido.status)) {
         setPedidos(prev => prev.filter(p => p.id !== pedido.id));
+        cancelarRemocao(pedido.id);
       } else {
         setPedidos(prev => prev.map(p => p.id === pedido.id ? pedido : p));
       }
     });
 
-    socket.on("pedido:fechado", (pedido) => {
+    socket.on("pedido:status", (pedido) => {
+      if (["fechado", "aguardando_pagamento", "cancelado", "retirado"].includes(pedido.status)) {
+        setPedidos(prev => prev.filter(p => p.id !== pedido.id));
+        cancelarRemocao(pedido.id);
+      } else {
+        setPedidos(prev => prev.map(p => p.id === pedido.id ? pedido : p));
+        // Agenda remoção automática quando ficar pronto
+        if (pedido.status === "pronto") {
+          agendarRemocao(pedido.id);
+        }
+      }
+    });
+
+    socket.on("pedido:retirado", (pedido) => {
       setPedidos(prev => prev.filter(p => p.id !== pedido.id));
+      cancelarRemocao(pedido.id);
     });
 
     socket.on("pedido:cancelado", (pedido) => {
       setPedidos(prev => prev.filter(p => p.id !== pedido.id));
+      cancelarRemocao(pedido.id);
+    });
+
+    socket.on("pedido:fechado", (pedido) => {
+      setPedidos(prev => prev.filter(p => p.id !== pedido.id));
+      cancelarRemocao(pedido.id);
     });
 
     return () => {
       socket.off("pedido:novo");
       socket.off("pedido:atualizado");
       socket.off("pedido:status");
-      socket.off("pedido:fechado");
+      socket.off("pedido:retirado");
       socket.off("pedido:cancelado");
+      socket.off("pedido:fechado");
+      // Limpa todos os timers
+      Object.values(timersRef.current).forEach(clearTimeout);
     };
   }, [fetchPedidos]);
 
   async function handleStatus(id, status) {
     try {
       await api.patch(`/food/pedidos/${id}/status`, { status });
+      // Agenda remoção se ficou pronto
+      if (status === "pronto") agendarRemocao(id);
     } catch (e) {
       console.error(e);
     }
   }
 
-  // Filtra por status
-  const categorias = [...new Set(
-    pedidos.flatMap(p => p.itens?.map(i => i.item?.categoria?.nome) || [])
-  )].filter(Boolean);
-
-  const filtered = filter === "all"
-    ? pedidos
-    : pedidos.filter(p => p.status === filter);
-
+  const filtered = filter === "all" ? pedidos : pedidos.filter(p => p.status === filter);
   const novos = pedidos.filter(p => p.status === "aberto").length;
   const preparando = pedidos.filter(p => p.status === "preparando").length;
   const prontos = pedidos.filter(p => p.status === "pronto").length;
@@ -127,7 +163,6 @@ export default function Kitchen() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", flexDirection: "column" }}>
 
-      {/* Som de notificação */}
       <audio ref={audioRef} preload="auto">
         <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg" />
       </audio>
@@ -159,7 +194,6 @@ export default function Kitchen() {
           </div>
         </div>
 
-        {/* Stats rápidos */}
         <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
           {[
             { label: "Novos", value: novos, color: "#FF6B35" },
@@ -171,6 +205,7 @@ export default function Kitchen() {
               <div style={{ fontFamily: "'Space Mono', monospace", fontSize: "9px", color: "var(--faint)", textTransform: "uppercase" }}>{s.label}</div>
             </div>
           ))}
+          {/* Toggle tema */}
           <button onClick={toggleTheme}
             style={{
               background: "var(--bg-inner)", border: "0.5px solid var(--border)",
@@ -197,7 +232,8 @@ export default function Kitchen() {
           <button key={f.value} onClick={() => setFilter(f.value)}
             style={{
               fontSize: "12px", padding: "6px 14px", borderRadius: "8px",
-              cursor: "pointer", border: "0.5px solid", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 500,
+              cursor: "pointer", border: "0.5px solid",
+              fontFamily: "'Space Grotesk', sans-serif", fontWeight: 500,
               background: filter === f.value ? "#F59E0B20" : "transparent",
               color: filter === f.value ? "#F59E0B" : "var(--muted)",
               borderColor: filter === f.value ? "#F59E0B50" : "var(--border)",
@@ -208,25 +244,18 @@ export default function Kitchen() {
         ))}
       </div>
 
-      {/* Grid de pedidos */}
+      {/* Grid */}
       <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto" }}>
         {filtered.length === 0 ? (
-          <div style={{
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-            height: "60vh", gap: "16px",
-          }}>
-            <ChefHat size={48} color="var(--muted)" />
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "60vh", gap: "16px" }}>
+            <div style={{ fontSize: "48px" }}>👨‍🍳</div>
             <div style={{ fontSize: "18px", fontWeight: 600, color: "var(--text)" }}>Nenhum pedido no momento</div>
             <div style={{ fontFamily: "'Space Mono', monospace", fontSize: "12px", color: "var(--muted)" }}>
               Aguardando novos pedidos...
             </div>
           </div>
         ) : (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-            gap: "16px",
-          }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "16px" }}>
             {filtered.map(p => {
               const cfg = statusColors[p.status] || statusColors.aberto;
               const tempo = tempoEspera(p.createdAt);
@@ -250,10 +279,7 @@ export default function Kitchen() {
                         <span style={{ fontFamily: "'Space Mono', monospace", fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>
                           #{p.id}
                         </span>
-                        <span style={{
-                          fontSize: "11px", padding: "3px 8px", borderRadius: "6px",
-                          background: cfg.bg, color: cfg.color, fontWeight: 600,
-                        }}>
+                        <span style={{ fontSize: "11px", padding: "3px 8px", borderRadius: "6px", background: cfg.bg, color: cfg.color, fontWeight: 600 }}>
                           {cfg.label}
                         </span>
                       </div>
@@ -263,9 +289,7 @@ export default function Kitchen() {
                       </div>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: "18px", fontWeight: 700, color: cor }}>
-                        {tempo}
-                      </div>
+                      <div style={{ fontSize: "18px", fontWeight: 700, color: cor }}>{tempo}</div>
                       <div style={{ fontFamily: "'Space Mono', monospace", fontSize: "9px", color: "var(--faint)", textTransform: "uppercase" }}>
                         espera
                       </div>
@@ -282,10 +306,9 @@ export default function Kitchen() {
                       }}>
                         <div style={{
                           width: "28px", height: "28px", borderRadius: "8px",
-                          background: cfg.color + "20", display: "flex",
-                          alignItems: "center", justifyContent: "center",
-                          fontSize: "14px", fontWeight: 700, color: cfg.color,
-                          flexShrink: 0,
+                          background: cfg.color + "20",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: "14px", fontWeight: 700, color: cfg.color, flexShrink: 0,
                         }}>
                           {ip.quantidade}
                         </div>
@@ -302,10 +325,9 @@ export default function Kitchen() {
                       </div>
                     ))}
 
-                    {/* Observação geral */}
                     {p.observacao && (
                       <div style={{ padding: "8px 12px", borderRadius: "8px", background: "#F59E0B10", border: "0.5px solid #F59E0B30" }}>
-                        <div style={{ fontSize: "11px", color: "#F59E0B", display: "flex", alignItems: "center", gap: "4px" }}><AlertTriangle size={11} />{p.observacao}</div>
+                        <div style={{ fontSize: "11px", color: "#F59E0B" }}>⚠️ {p.observacao}</div>
                       </div>
                     )}
                   </div>
@@ -337,11 +359,19 @@ export default function Kitchen() {
                       </button>
                     )}
                     {p.status === "pronto" && (
-                      <div style={{
-                        flex: 1, padding: "12px", borderRadius: "10px", textAlign: "center",
-                        background: "#00F5A010", color: "#00F5A0", fontSize: "13px", fontWeight: 700,
-                      }}>
-                        <CheckCircle size={14} style={{ display: "inline", verticalAlign: "middle", marginRight: "6px" }} />Pronto para servir!
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px" }}>
+                        <div style={{
+                          padding: "10px 12px", borderRadius: "10px", textAlign: "center",
+                          background: "#00F5A010", color: "#00F5A0", fontSize: "13px", fontWeight: 700,
+                        }}>
+                          ✅ Pronto para servir!
+                        </div>
+                        <div style={{
+                          fontFamily: "'Space Mono', monospace", fontSize: "10px",
+                          color: "var(--faint)", textAlign: "center",
+                        }}>
+                          Some em 15 min automaticamente
+                        </div>
                       </div>
                     )}
                   </div>
