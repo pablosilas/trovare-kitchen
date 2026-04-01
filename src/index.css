@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --bg:       #0A0A0F;
+  --bg-card:  #111118;
+  --bg-inner: #16161F;
+  --border:   #1E1E2E;
+  --text:     #F0F0FF;
+  --muted:    #5A5A7A;
+  --faint:    #3A3A5A;
+  --accent:   #FF6B35;
+  --green:    #00F5A0;
+  --amber:    #F59E0B;
+  --purple:   #B8A8FF;
+  --red:      #FF3D6E;
+  color-scheme: dark;
+}
+
+:root, :root[data-theme="dark"] {
+  --bg:       #0A0A0F;
+  --bg-card:  #111118;
+  --bg-inner: #16161F;
+  --border:   #1E1E2E;
+  --text:     #F0F0FF;
+  --muted:    #5A5A7A;
+  --faint:    #3A3A5A;
+  --accent:   #FF6B35;
+  --green:    #00F5A0;
+  --amber:    #F59E0B;
+  --purple:   #B8A8FF;
+  --red:      #FF3D6E;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg:       #F5F3EF;
+  --bg-card:  #FFFFFF;
+  --bg-inner: #F0EDE8;
+  --border:   #E0DDD8;
+  --text:     #1A1A1A;
+  --muted:    #888888;
+  --faint:    #AAAAAA;
+  --accent:   #FF6B35;
+  --green:    #00A868;
+  --amber:    #D97706;
+  --purple:   #7C6AF5;
+  --red:      #E55A25;
+  color-scheme: light;
+}
+
+* { font-family: 'Space Grotesk', sans-serif; box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
